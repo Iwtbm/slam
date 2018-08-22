@@ -3,7 +3,7 @@
 """
 Created on Wed Jul 25 15:33:45 2018
 
-@author: yifengluo
+@author: wendaxu
 """
 import numpy as np
 import time
