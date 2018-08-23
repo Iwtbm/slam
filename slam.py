@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Wed Jul 25 15:33:45 2018
+Created on Wed Jul 25 15:23:45 2018
 
 @author: wendaxu
 """
@@ -9,18 +9,22 @@ import numpy as np
 import time
 import scipy.ndimage
 import heapq
+from scipy import interpolate
+from scipy import optimize
+from sklearn.neighbors import NearestNeighbors
+from numpy.linalg import multi_dot
 class Data_process:
-    def __init__(self,path):
-        self.data = np.loadtxt(path)
+    def __init__(self,data):
+        self.data = np.array(data)
         self.Len = len(self.data)
         self.valid_len = 0 
         
     def valid_Data(self):
 
-        self.processed_data = np.zeros([2,np.sum(self.data != np.inf)])
+        self.processed_data = np.zeros([2,np.sum(self.data != 60)])
         num = 0
         for i in range(self.Len):
-            if self.data[i] != np.inf:
+            if self.data[i] != 60:
                 self.processed_data[0,num] = i
                 self.processed_data[1,num] = self.data[i]
                 num+=1
@@ -38,8 +42,8 @@ class Data_process:
             for i in range(self.valid_len):
                 Degree = self.processed_data[0,i]
                 Range = self.processed_data[1,i]
-                New_Data[0,i] = np.cos(Degree/180 * np.pi) * Range
-                New_Data[1,i] = np.sin(Degree/180 * np.pi) * Range
+                New_Data[0,i] = np.cos(Degree/self.Len * np.pi) * Range
+                New_Data[1,i] = np.sin(Degree/self.Len * np.pi) * Range
             self.processed_data = New_Data
             
     def add_dimension(self):
@@ -187,6 +191,7 @@ class Node:
         
     def expand(self):
         if len(self.children) == 0:
+	    
             child = [[self.c_x, self.c_y], [self.c_x, self.c_y + 2**(self.c_h-1)], [self.c_x + 2**(self.c_h-1), self.c_y], [self.c_x + 2**(self.c_h-1), self.c_y + 2**(self.c_h-1)]] 
             for i in range(4):
                 self.children.append(Node(self.info, self.c_h - 1, child[i][0], child[i][1], self.c_theta, parent = self))
@@ -195,20 +200,33 @@ class Node:
             
                 
     
+                
+    
     
 class ICP:
-    def __init__(self,Dict = {}):
+    '''
+    Transform_P2Q is matrix of near pic, ie Transform_P2Q[12] is pic_13 to pic_12
+    Transform_P2O is matrix of origin and target, ie Transform_P2O[12] is pic_12 to pic_9(
+    assume pic_9 is the orginal pic)
+
+    '''
+    def __init__(self,Dict = {},parent = np.eye(3)):
         self.Dict = Dict
         self.Len = len(self.Dict)
         self.Transform_P2Q = {}
-        self.resolution = 25
+        self.resolution = 10
+        self.worldmap_size = [1001, 1001] 
         self.size = [1001, 1001]
         self.origin = [500, 500]
-        self.lo_occ = 0.9
-        self.lo_free = 0.7
+        self.lo_occ = 1
+        self.lo_free = 0.5
         self.lo_max = 100
         self.lo_min = -100
-        
+        self.worldmap = np.zeros(self.worldmap_size)
+
+        self.relation_matrix = np.eye(3)
+        self.parent = parent
+    
     def update(self):
         Len_Trans = len(self.Transform_P2Q)
         Len_Dict = self.Len
@@ -227,48 +245,44 @@ class ICP:
     def fit(self,ratio = [0.2,0.8],initial = [0,0,0],Target = 0):
         if Target ==0 :
             Target = self.Dict
-        for i in Target:
+            i = min(Target)
+        while 1:
             print("Matching %dth pic"%(i))
             a = time.clock()
-            P = self.Dict[i] 
-            self.submap_values=  self.Occupied_Grid_Mapping(P)
-            self.x_center,self.y_center = self.origin
-            Q = self.Dict[i+1]
+            Q = self.Dict[i] #change the sequence,so change to transform matrix P_Q
+            P = self.Dict[i+1]
             down = int(P.shape[1] * ratio[0])
             up = int(P.shape[1] * ratio[1])
             print("1th = ", time.clock() - a)
             a = time.clock()
+            self.neigh = NearestNeighbors(n_neighbors=1)
+            self.neigh.fit(Q[0:2,:].T)
             #self.KD_trees = scipy.spatial.KDTree(Q[0:2,:].T)
             print("2th = ", time.clock() - a)
             a = time.clock()
             self.P_now = np.copy(P[:,down:up])
-            self.points = np.vstack((self.P_now,np.ones([1,self.P_now.shape[1]])))
+            self.P_now = np.vstack((self.P_now,np.ones([1,self.P_now.shape[1]])))
  
-            result  = scipy.optimize.minimize(self.loss_function,initial)
+            result  = optimize.minimize(self.least_square,initial)
             print("3th = ", time.clock() - a)
             a = time.clock()
             t_x,t_y,theta = result.x
         
-            T =  np.array([[np.cos(theta/180*np.pi),-np.sin(theta/180*np.pi),t_x],[np.sin(theta/180*np.pi),np.cos(theta/180*np.pi),t_y],[0,0,1]])
+            T =  np.array([[np.cos(theta/180.0*np.pi),-np.sin(theta/180.0*np.pi),t_x],[np.sin(theta/180.0*np.pi),np.cos(theta/180.0*np.pi),t_y],[0,0,1]])
             print("4th = ", time.clock() - a)
             
             self.Transform_P2Q[i] = T
             
-            if i+1 == len(self.Dict) - 1 :
+            if i+1 == max(Target) :
                 break
-            
-            
+                i += 1
     def clean_transform(self):
         self.Transform_P2Q = {}
         return "clean successful"
-    
-    
     def clean_data(self):
         self.Data = {}
         self.Transform_P2Q = {}
         return "clean successful"
-    
-    
     def add_data(self,data):
         if isinstance(data,dict):
             Len = len(data)
@@ -283,48 +297,55 @@ class ICP:
         else:
             print("invalid data type")
         
-    
-    def loss_function(self, x):  # submap_value: n * n
-        Len = self.points.shape[1]
+    def least_square(self,x):
+        Len = self.P_now.shape[1]
         Loss = 0
         t_x,t_y,theta = x.tolist()
-        TF =  np.array([[np.cos(theta/180*np.pi),-np.sin(theta/180*np.pi),t_x],[np.sin(theta/180*np.pi),np.cos(theta/180*np.pi),t_y],[0,0,1]])
-        points_new = np.dot(TF,self.points)
-        points_new = points_new[0:2,:]
-        size = self.submap_value.shape[0]
-        grid_x, grid_y = np.mgrid[-self.x_center:(size-1)-self.x_center:1, -self.y_center:(size - 1)-self.y_center:1]
-#     x = np.linspace(0, size - 1, size)
-#     y = np.linspace(0, size - 1, size)
-    #  xx, yy = np.meshgrid(x, y)
-        grid_x = grid_x.reshape(10000, 1)
-        grid_y = grid_y.reshape(10000, 1)
-        submap_values = self.submap_values.reshape()
-        grid = np.hstack((grid_x, grid_y))
-    
-        M = interpolate.griddata(grid, submap_values, points_new, kind='cubic')
-        Loss = np.sum((1 - M)**2)
-    
+        Transform_matrix =  np.array([[np.cos(theta/180.0*np.pi),-np.sin(theta/180.0*np.pi),t_x],[np.sin(theta/180.0*np.pi),np.cos(theta/180.0*np.pi),t_y],[0,0,1]])
+        P_after = np.dot(Transform_matrix,self.P_now)
+        target = P_after[0:2,:]
+        #result = self.KD_trees.query(target.T,1)
+        #Loss = np.sum(result[:][0]**2)
+        distances, indices = self.neigh.kneighbors(target.T, return_distance=True)
+        Loss = np.sum(distances**2)
+        Loss = Loss/ Len
         return Loss
-        
+
+#Time = time.clock()
+#index = np.nonzero(matrix)
+#value = matrix[index]
+#L= np.vstack((np.vstack((index[0],index[1])),value))
+#print(time.clock() - Time)
+#
+#
+#i = ICP(Dict = Data1)
     #def interpolation(self, submap_matrix, scan_matrix):  # how to optimize scan to submap
-    def Occupied_Grid_Mapping(self, Matrix):
-        current_map = np.zeros(self.size)
-        for i in range(Matrix.shape[1]):
-            x_point = Matrix[0,i]
-            y_point = -Matrix[1,i]
-            grid_point = (np.ceil(x_point * self.resolution).astype(int), np.ceil(y_point * self.resolution).astype(int))
+    def Occupied_Grid_Mapping(self, Matrix, pose = np.eye((3,3))): # pose:transform matrix
+        if pose.all() == np.zeros.all():
+            current_map = np.zeros(self.size)
+        else:
+            current_map = self.worldmap
+        x_robot = pose[0][2]
+        y_robot = pose[1][2]
+        grid_robot = np.ceil(np.array([self.resolution * x_robot, self.resolution * y_robot])).astype(int)
+        Matrix = np.vstack((Matrix, np.ones(Matrix.shape[1])))
+        points = np.dot(pose, Matrix)
+        for i in range(points.shape[1]):
+            x_point = points[0,i]
+            y_point = -points[1,i]  # or change the minus to plus
+            grid_point = (np.ceil((x_point * self.resolution)).astype(int), np.ceil((y_point * self.resolution)).astype(int))
             grid_point = np.array(grid_point).reshape(2) 
-            free_points = np.array(self.get_line((0, 0), grid_point))
+            free_points = np.array(self.get_line(grid_robot, grid_point))
             if free_points.any():
                 current_map[free_points[:, 1] + self.origin[1], free_points[:, 0] + self.origin[0]] -= self.lo_free
             else:
                 current_map[self.origin[1], self.origin[0]] -= self.lo_free
-            current_map[self.origin[1], self.origin[0]] += self.lo_occ
+            current_map[self.origin[1]+x_point, self.origin[0]+y_point] += self.lo_occ
  
         current_map[current_map > self.lo_max] = self.lo_max
         current_map[current_map < self.lo_min] = self.lo_min 
         
-    return current_map
+        return current_map
     
 
     def get_line(self, start, end):
@@ -385,20 +406,20 @@ class ICP:
         
         return points    
 
-Time = time.clock()
-index = np.nonzero(matrix)
-value = matrix[index]
-L= np.vstack((np.vstack((index[0],index[1])),value))
-print(time.clock() - Time)
+    def Map_create(self):
+        self.Transform_P2O = {}
+        Max = max(self.Dict)
+        Concantenate = min(self.Dict)
+        Min = Concantenate + 1
 
-
-
-import scipy.io as io
-data = io.loadmat('practice.mat')
-ranges = data['ranges']
-angles = data['scanAngles']
-pose = data['pose']
-
-
+        for i in range(Min,Max):
+            Matrix_list = [self.Transform_P2Q[j] for j in range(Min,i+1)]
+            Matrix_list.reverse()
+            Matrix = multi_dot(Matrix_list)  # Test function
+            self.Transform_P2O[i+1] = Matrix
+        self.relation_matrix_to_next = self.Transform_P2O[Max]#which should be transferred to next icp class
+        self.relation_matrix = np.dot(self.Transform_P2Q[Concantenate],self.parent)# which should be stored
 
         
+
+
