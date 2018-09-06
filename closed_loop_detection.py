@@ -17,12 +17,13 @@ from scipy import ndimage
 
 
 class Grid_process:
-    def __init__(self, scale, depth, Origin_grid, Target_grid):                          # Origin_grid: m*n, Target_grid: m*n
+    def __init__(self, scale, depth, Origin_grid, Target_grid, Target_tf):                          # Origin_grid: m*n, Target_grid: m*n
         self.score_threshold = 50
         self.scale = scale
         self.depth = depth
         self.Origin_grid = Origin_grid                   # matrix
-        self.Target_grid = Target_grid                   # matrix
+        self.Target_grid = Target_grid                   # matrix 3 * n
+        self.Target_tf = Target_tf
         self.W_x = 7
         self.W_y = 7
         self.W_theta = 30/180 * np.pi                             # search window rotation
@@ -49,7 +50,7 @@ class Grid_process:
         '''
         size_x = np.ceil(2 * self.w_x / 2**self.depth)
         size_y = np.ceil(2 * self.w_y / 2**self.depth)
-        self.root = [Node(self.info, self.depth, -self.w_x + i * 2**self.depth, -self.w_y + j * 2**self.depth, -self.W_theta + k * self.theta_stepsize) for i in range(int(size_x)) for j in range(int(size_y)) for k in range(int(2*self.w_theta))]    
+        self.root = [Node(self.info, self.depth, -self.w_x + i * 2**self.depth, -self.w_y + j * 2**self.depth, -self.W_theta + k * self.theta_stepsize, self.Target_tf) for i in range(int(size_x)) for j in range(int(size_y)) for k in range(int(2*self.w_theta))]    
 
     
     def resolution_devide(self):
@@ -60,12 +61,12 @@ class Grid_process:
         '''
         
         self.info = {}
-        Com_target = self.matrix_compress(self.Target_grid)
+        
         for i in range(self.depth+1):   
             Filter_size = 2**i
             New_origin = ndimage.maximum_filter(self.Origin_grid, size=2*Filter_size-1, mode='constant')
             
-            self.info[i] = (New_origin, Com_target)
+            self.info[i] = (New_origin, self.Target_grid)
         
         
     def matrix_compress(self, Matrix):
@@ -103,12 +104,13 @@ class Grid_process:
 
         
 class Node:
-    def __init__(self, info, depth, c_x, c_y, c_theta, parent = None):      # grid 3*N
+    def __init__(self, info, depth, c_x, c_y, c_theta, Target_tf, parent = None):      # grid 3*N
 
         self.c_h = depth
         self.c_x = c_x
         self.c_y = c_y                                                  
         self.c_theta = c_theta
+        self.Target_tf = Target_tf
         self.info = info
         self.Origin_grid = info[depth][0]
         self.Target_com = info[depth][1]
@@ -145,7 +147,7 @@ class Node:
     def score_cal(self):
         translation = np.array([[self.c_x, self.c_y, 1]])
         rotation = np.array([[np.cos(self.c_theta), - np.sin(self.c_theta)], [np.sin(self.c_theta), np.cos(self.c_theta)], [0, 0]])
-        target_points = np.dot(np.hstack((rotation, translation.T)), np.vstack((self.Target_com[:2, :], np.ones(self.Target_com.shape[1]))))
+        target_points = np.dot(np.dot(np.hstack((rotation, translation.T)),self.Target_tf), np.vstack((self.Target_com[:2, :], np.ones(self.Target_com.shape[1]))))
         grid = self.Grid_Mapping(target_points)        # 3 * n
         self.score = sum(self.Origin_grid[(grid[0], grid[1])])
     
@@ -154,7 +156,7 @@ class Node:
         if len(self.children) == 0:                # use c_x, c_y many times
             child = [[self.c_x, self.c_y], [self.c_x, self.c_y + 2**(self.c_h-1)], [self.c_x + 2**(self.c_h-1), self.c_y], [self.c_x + 2**(self.c_h-1), self.c_y + 2**(self.c_h-1)]] 
             for i in range(4):
-                self.children.append(Node(self.info, self.c_h - 1, child[i][0], child[i][1], self.c_theta, parent = self))
+                self.children.append(Node(self.info, self.c_h - 1, child[i][0], child[i][1], self.c_theta, self.Target_tf, parent = self))
         return self.children
         
     
